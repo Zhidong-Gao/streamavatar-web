@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>companion</title>
+<style>
+  html,body{margin:0;height:100%;background:#ece2e8;font-family:-apple-system,system-ui,sans-serif;}
+  #wrap{display:flex;height:100vh;}
+  #stage{flex:0 0 560px;display:flex;align-items:center;justify-content:center;position:relative;background:radial-gradient(circle at 50% 40%,#f3ecf0,#e3d7df);}
+  #anime{display:block;width:512px;height:512px;border-radius:12px;background:#e3d7df;object-fit:cover;}
+  #c{position:absolute;bottom:16px;right:16px;width:110px;height:110px;border:2px solid #fff;border-radius:8px;opacity:.92;box-shadow:0 2px 10px rgba(0,0,0,.22);}
+  #v2dot{position:absolute;top:14px;right:14px;font-size:11px;color:#5a8;opacity:.85;}
+  #avatars{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:10;}
+  .av{padding:5px 11px;border:1px solid #d8cdd5;border-radius:14px;font-size:12px;background:rgba(255,255,255,.82);color:#85677a;cursor:pointer;}
+  .av.on{background:#c07b9c;color:#fff;border-color:#c07b9c;}
+  #side{flex:1;display:flex;flex-direction:column;border-left:1px solid #d8cdd5;background:#fbf7fa;}
+  #log{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:10px;}
+  .b{max-width:78%;padding:9px 13px;border-radius:14px;font-size:15px;line-height:1.4;}
+  .me{align-self:flex-end;background:#c88aa8;color:#fff;border-bottom-right-radius:4px;}
+  .her{align-self:flex-start;background:#fff;color:#33282f;border:1px solid #e6dbe2;border-bottom-left-radius:4px;}
+  #bar{display:flex;gap:8px;padding:14px;border-top:1px solid #e6dbe2;}
+  #in{flex:1;padding:11px 14px;border:1px solid #d8cdd5;border-radius:20px;font-size:15px;outline:none;}
+  #send{padding:0 18px;border:none;border-radius:20px;background:#c07b9c;color:#fff;font-size:15px;cursor:pointer;}
+  #dot{position:absolute;top:14px;left:14px;font-size:12px;color:#a08;opacity:.7;}
+  #modes{display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid #e6dbe2;background:#f6eef3;}
+  .mode{padding:5px 11px;border:1px solid #d8cdd5;border-radius:14px;font-size:13px;background:#fff;color:#85677a;cursor:pointer;}
+  .mode.on{background:#c07b9c;color:#fff;border-color:#c07b9c;}
+</style>
+<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.2/dist/browser/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display/dist/cubism4.min.js"></script>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><div id="dot">connecting…</div><div id="v2dot">v2 ○</div><div id="avatars"></div><img id="anime"/><canvas id="c" width="512" height="512"></canvas></div>
+  <div id="side">
+    <div id="modes"></div>
+    <div id="log"></div>
+    <div id="bar">
+      <input id="in" placeholder="say something to her…" autocomplete="off" />
+      <button id="send">send</button>
+    </div>
+  </div>
+</div>
+<script>
+const CDN = "https://cdn.jsdelivr.net/gh";
+// Backend (DGX) origin. Empty = same-origin (page served BY the backend, e.g. local dev).
+// On GitHub Pages (HTTPS) we must reach the backend over wss:// + https:// or the browser
+// blocks it as mixed content — point at the DGX public Tailscale-Funnel host.
+const BACKEND = new URLSearchParams(location.search).get("backend")
+  || (location.hostname.endsWith("github.io") ? "edgexpert-00cf.tail0da921.ts.net" : "");
+const WS_URL = (BACKEND ? "wss://" + BACKEND
+  : (location.protocol === "https:" ? "wss://" : "ws://") + location.host) + "/ws";
+const HTTP_BASE = BACKEND ? "https://" + BACKEND : "";   // prefix for /audio over HTTPS
+const MODELS = {
+  Mao:   { label: "Mao 女巫", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Mao/Mao.model3.json`, scale: 1.92, pos: [256, 450], hasBody: true },
+  Haru:  { label: "Haru 职业", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Haru/Haru.model3.json`, scale: 1.92, pos: [256, 470], hasBody: true },
+  Hiyori:{ label: "Hiyori", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json`, scale: 1.7, pos: [256, 430], hasBody: true },
+  Kei:   { label: "Kei 口型", url: `${CDN}/Live2D/CubismWebMotionSyncComponents@develop/Samples/Resources/Kei_vowels/Kei_vowels.model3.json`, scale: 1.0, pos: [256, 256], hasBody: false },
+};
+function sendAvatarBody() {   // tell the backend whether this avatar has a body (head-only -> no)
+  try { if (window.__ws && window.__ws.readyState === 1)
+    window.__ws.send(JSON.stringify({ type: "avatar", model: curModel, body: MODELS[curModel].hasBody !== false })); } catch (e) {}
+}
+let curModel = localStorage.getItem("avatar") || "Mao";
+let core = null, model = null, app = null, latest = null, speech = null;
+const HEAD_HOLD = false;  // freeze head/eyes/body (mouth-debug only). false = full motion.
+// when HEAD_HOLD: these params are NEVER applied (stay at default), so model.update can't
+// fight a per-frame override — only the mouth (vowel params + MouthOpenY) is driven.
+const HOLD_KEYS = new Set(["ParamAngleX","ParamAngleY","ParamAngleZ","ParamBodyAngleX","ParamBodyAngleY","ParamBodyAngleZ",
+  "ParamBreath","ParamBreathY","ParamBrowLY","ParamBrowRY","ParamBrowLForm","ParamBrowRForm",
+  "ParamEyeBallX","ParamEyeBallY","ParamEyeLOpen","ParamEyeROpen","ParamCheek","ParamEyeLSmile","ParamEyeRSmile",
+  "ParamArmLA01","ParamArmRA01"]);
+const audioCache = {};
+
+// ── StreamDiffusionV2 bridge: Live2D canvas (driver) -> DGX v2 -> anime stream ──
+const V2_ENABLED = false;   // OFF: pure Live2D dev. flip true to render through DGX v2.
+const V2_HOST = "100.97.254.63:7860";
+const V2_PARAMS = { prompt: "masterpiece, ultra-detailed anime, beautiful girl, silver white hair, "
+  + "emerald green eyes, exquisitely detailed face, soft cinematic lighting, upper body, clean background",
+  negative_prompt: "lowres, bad anatomy, blurry, deformed, extra limbs", input_mode: "camera", seed: 42 };
+function canvasJpeg() {
+  return new Promise(res => document.getElementById("c").toBlob(
+    b => b ? b.arrayBuffer().then(res) : res(null), "image/jpeg", 0.9));
+}
+async function startV2() {
+  const id = (crypto.randomUUID ? crypto.randomUUID()
+    : ([1e7]+-1e3+-4e3).replace(/[018]/g, c => (c ^ Math.random()*16 >> c/4).toString(16)));
+  const ws = new WebSocket(`ws://${V2_HOST}/api/ws/${id}`);
+  ws.binaryType = "arraybuffer";
+  async function sendFrame() {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const buf = await canvasJpeg();
+    if (!buf || buf.byteLength < 100 || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ status: "next_frame" }));
+    ws.send(JSON.stringify(V2_PARAMS));
+    ws.send(buf);
+  }
+  ws.onopen = async () => {
+    document.getElementById("v2dot").textContent = "v2 ● live";
+    for (let i = 0; i < 3; i++) await sendFrame();              // PRIME before opening stream
+    document.getElementById("anime").src = `http://${V2_HOST}/api/stream/${id}?t=` + Date.now();
+  };
+  ws.onmessage = async (e) => {
+    if (typeof e.data !== "string") return;
+    try { const d = JSON.parse(e.data);
+      if (d.status === "send_frame" || d.status === "wait") await sendFrame();
+    } catch (err) {}
+  };
+  ws.onclose = () => { document.getElementById("v2dot").textContent = "v2 ○ reconnecting"; setTimeout(startV2, 1500); };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+
+async function loadModel(key) {
+  const def = MODELS[key] || MODELS.Mao;
+  if (model) { try { app.stage.removeChild(model); model.destroy(); } catch (e) {} model = null; core = null; }
+  model = await PIXI.live2d.Live2DModel.from(def.url, { autoInteract: false });
+  app.stage.addChild(model);
+  const b = model.getBounds();
+  model.scale.set(512 / Math.max(b.width, b.height) * def.scale);
+  model.anchor.set(0.5, 0.5); model.position.set(def.pos[0], def.pos[1]);
+  if (model.internalModel.motionManager) {
+    model.internalModel.motionManager.stopAllMotions();
+    try { model.internalModel.motionManager.update = function () { return false; }; } catch (e) {}   // kill built-in idle motion
+  }
+  model.internalModel.eyeBlink = null;
+  try { model.internalModel.physics = null; } catch (e) {}     // kill hair/body physics jitter
+  try { model.internalModel._physics = null; } catch (e) {}
+  model.autoUpdate = false;
+  core = model.internalModel.coreModel;
+  window.__core = core; window.__model = model; window.__app = app;   // expose for debugging/probing
+  curModel = key; localStorage.setItem("avatar", key);
+  document.querySelectorAll("#avatars .av").forEach(el => el.classList.toggle("on", el.dataset.k === key));
+  sendAvatarBody();
+}
+
+function buildAvatars() {
+  const bar = document.getElementById("avatars");
+  Object.keys(MODELS).forEach(k => {
+    const el = document.createElement("div");
+    el.className = "av" + (k === curModel ? " on" : "");
+    el.dataset.k = k; el.textContent = MODELS[k].label;
+    el.onclick = () => { if (k !== curModel) loadModel(k); };
+    bar.appendChild(el);
+  });
+}
+
+(async () => {
+  app = new PIXI.Application({ view: document.getElementById("c"), width: 512, height: 512,
+    backgroundColor: 0xece2e8, antialias: true, autoStart: true, preserveDrawingBuffer: true });
+  buildAvatars();
+  await loadModel(curModel);
+  connect();
+  if (V2_ENABLED) {
+    setTimeout(startV2, 1200);   // Live2D drives a few frames first, then bridge to v2 renderer
+  } else {                       // pure Live2D: canvas is the main display, no v2
+    document.getElementById("anime").style.display = "none";
+    document.getElementById("v2dot").style.display = "none";
+    const cv = document.getElementById("c");
+    cv.style.cssText = "display:block;position:static;width:512px;height:512px;border:none;box-shadow:none;opacity:1;border-radius:12px;";
+  }
+  // apply the most recent params every animation frame (smooth even if net jitters)
+  function frame() {
+    if (latest && core && model) {
+      for (const k in latest) { if (HEAD_HOLD && HOLD_KEYS.has(k)) continue; try { core.setParameterValueById(k, latest[k]); } catch (e) {} }
+      // LIP-SYNC LOCKED TO THE AUDIO CLOCK: while speaking, override the vowel params
+      // from the track indexed by audio.currentTime -> mouth and voice share ONE clock.
+      if (speech && !speech.audio.paused && !speech.audio.ended) {
+        // viseme times are synced DIRECTLY to the audio clock — no lead offset (the track
+        // is zero-phase smoothed, so shapes peak at their viseme time, no lag to compensate).
+        const i = Math.floor(speech.audio.currentTime * speech.fps);
+        const v = speech.vowels[Math.min(i, speech.vowels.length - 1)];
+        if (v) for (const k in v) { try { core.setParameterValueById(k, v[k]); } catch (e) {} }
+        // whole-body co-speech motion (head/brows/hands/body) — same audio clock
+        const m = speech.motion[Math.min(i, speech.motion.length - 1)];
+        if (m) for (const k in m) { if (HEAD_HOLD && HOLD_KEYS.has(k)) continue; try { core.setParameterValueById(k, m[k]); } catch (e) {} }
+      }
+      core.update(); model.update(33);
+      if (HEAD_HOLD) {   // model.update re-drives head/eyes (physics/focus) — override it AFTER, then re-sync
+        for (const k of HOLD_KEYS) {
+          try { core.setParameterValueById(k, (k === "ParamEyeLOpen" || k === "ParamEyeROpen") ? 1 : 0); } catch (e) {}
+        }
+        core.update();
+      }
+      app.renderer.render(app.stage);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+function connect() {
+  const ws = new WebSocket(WS_URL);
+  ws.onopen = () => { document.getElementById("dot").textContent = "● live"; sendAvatarBody(); };
+  ws.onclose = () => { document.getElementById("dot").textContent = "○ reconnecting…"; setTimeout(connect, 1000); };
+  ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.type === "frame") latest = d.params;
+    else if (d.type === "preload") { const a = new Audio(HTTP_BASE + d.url); a.preload = "auto"; a.load(); audioCache[d.url] = a; }
+    else if (d.type === "speech") {                      // play audio + lock lip-sync to its clock
+      if (speech && speech.audio) { try { speech.audio.pause(); } catch(e){} }  // never overlap a prior utterance
+      const a = audioCache[d.url] || new Audio(HTTP_BASE + d.url); delete audioCache[d.url];
+      a.currentTime = 0; a.play().catch(()=>{});
+      speech = { audio: a, vowels: d.vowels, motion: d.motion, fps: d.fps };
+    }
+    else if (d.type === "chat") bubble("her", d.text);
+    else if (d.type === "mode") setActiveMode(d.name);
+  };
+  window.__ws = ws;
+}
+
+const MODES = [["lively","活泼"],["joyful","喜悦"],["gentle","文静"],["quiet","安静"],["restless","烦躁"]];
+function buildModes() {
+  const bar = document.getElementById("modes");
+  MODES.forEach(([k, cn]) => {
+    const b = document.createElement("div");
+    b.className = "mode"; b.dataset.k = k; b.textContent = cn;
+    b.onclick = () => { if (window.__ws && window.__ws.readyState === 1) window.__ws.send(JSON.stringify({ type: "mode", name: k })); };
+    bar.appendChild(b);
+  });
+}
+function setActiveMode(k) {
+  document.querySelectorAll(".mode").forEach(e => e.classList.toggle("on", e.dataset.k === k));
+}
+buildModes();
+
+function bubble(who, text) {
+  const log = document.getElementById("log");
+  const el = document.createElement("div");
+  el.className = "b " + (who === "her" ? "her" : "me");
+  el.textContent = text; log.appendChild(el); log.scrollTop = log.scrollHeight;
+}
+function sendMsg() {
+  const inp = document.getElementById("in"); const t = inp.value.trim();
+  if (!t || !window.__ws || window.__ws.readyState !== 1) return;
+  bubble("me", t); window.__ws.send(JSON.stringify({ type: "user", text: t })); inp.value = "";
+}
+document.getElementById("send").onclick = sendMsg;
+document.getElementById("in").addEventListener("keydown", (e) => { if (e.key === "Enter") sendMsg(); });
+</script>
+</body>
+</html>
