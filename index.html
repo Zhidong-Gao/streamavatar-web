@@ -53,10 +53,10 @@ const WS_URL = (BACKEND ? "wss://" + BACKEND
   : (location.protocol === "https:" ? "wss://" : "ws://") + location.host) + "/ws";
 const HTTP_BASE = BACKEND ? "https://" + BACKEND : "";   // prefix for /audio over HTTPS
 const MODELS = {
-  Mao:   { label: "Mao 女巫", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Mao/Mao.model3.json`, scale: 1.92, pos: [256, 450], hasBody: true },
-  Haru:  { label: "Haru 职业", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Haru/Haru.model3.json`, scale: 1.92, pos: [256, 470], hasBody: true },
-  Hiyori:{ label: "Hiyori", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json`, scale: 1.7, pos: [256, 430], hasBody: true },
-  Kei:   { label: "Kei 口型", url: `${CDN}/Live2D/CubismWebMotionSyncComponents@develop/Samples/Resources/Kei_vowels/Kei_vowels.model3.json`, scale: 1.0, pos: [256, 256], hasBody: false },
+  Mao:   { label: "Mao 女巫", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Mao/Mao.model3.json`, scale: 0.98, posY: 0.5, hasBody: true },
+  Haru:  { label: "Haru 职业", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Haru/Haru.model3.json`, scale: 0.98, posY: 0.5, hasBody: true },
+  Hiyori:{ label: "Hiyori", url: `${CDN}/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json`, scale: 0.98, posY: 0.5, hasBody: true },
+  Kei:   { label: "Kei 口型", url: `${CDN}/Live2D/CubismWebMotionSyncComponents@develop/Samples/Resources/Kei_vowels/Kei_vowels.model3.json`, scale: 1.15, posY: 0.46, hasBody: false },
 };
 function sendAvatarBody() {   // tell the backend whether this avatar has a body (head-only -> no)
   try { if (window.__ws && window.__ws.readyState === 1)
@@ -72,6 +72,9 @@ const HOLD_KEYS = new Set(["ParamAngleX","ParamAngleY","ParamAngleZ","ParamBodyA
   "ParamEyeBallX","ParamEyeBallY","ParamEyeLOpen","ParamEyeROpen","ParamCheek","ParamEyeLSmile","ParamEyeRSmile",
   "ParamArmLA01","ParamArmRA01"]);
 const audioCache = {};
+// Portrait stage so the FULL body fits (avatars are tall) and we use the vertical space.
+const CH = Math.max(600, Math.min(window.innerHeight - 24, 1000));
+const CW = Math.min(540, Math.round(CH * 0.62));
 
 
 let loadSeq = 0;
@@ -83,9 +86,12 @@ async function loadModel(key) {
   if (my !== loadSeq) { try { m.destroy(); } catch (e) {} return; }   // a newer switch started -> drop this one
   model = m;
   app.stage.addChild(model);
-  const b = model.getBounds();
-  model.scale.set(512 / Math.max(b.width, b.height) * def.scale);
-  model.anchor.set(0.5, 0.5); model.position.set(def.pos[0], def.pos[1]);
+  model.scale.set(1);
+  const b = model.getBounds();                       // intrinsic px at scale 1
+  // fit the WHOLE model into the portrait stage (full body); def.scale ~1 = exact fit
+  model.scale.set(Math.min(CW / b.width, CH / b.height) * def.scale);
+  model.anchor.set(0.5, 0.5);
+  model.position.set(CW / 2, CH * (def.posY != null ? def.posY : 0.5));
   if (model.internalModel.motionManager) {
     model.internalModel.motionManager.stopAllMotions();
     try { model.internalModel.motionManager.update = function () { return false; }; } catch (e) {}   // kill built-in idle motion
@@ -113,7 +119,7 @@ function buildAvatars() {
 }
 
 (async () => {
-  app = new PIXI.Application({ view: document.getElementById("c"), width: 512, height: 512,
+  app = new PIXI.Application({ view: document.getElementById("c"), width: CW, height: CH,
     backgroundColor: 0xece2e8, antialias: true, autoStart: true, preserveDrawingBuffer: true });
   buildAvatars();
   await loadModel(curModel);
@@ -122,7 +128,7 @@ function buildAvatars() {
   const _anime = document.getElementById("anime"); if (_anime) _anime.style.display = "none";
   const _v2dot = document.getElementById("v2dot"); if (_v2dot) _v2dot.style.display = "none";
   const cv = document.getElementById("c");
-  cv.style.cssText = "display:block;position:static;width:512px;height:512px;border:none;box-shadow:none;opacity:1;border-radius:12px;";
+  cv.style.cssText = "display:block;position:static;width:" + CW + "px;height:" + CH + "px;border:none;box-shadow:none;opacity:1;border-radius:12px;";
   // apply the most recent params every animation frame (smooth even if net jitters)
   function frame() {
     if (latest && core && model) {
