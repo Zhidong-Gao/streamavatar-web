@@ -9,7 +9,8 @@
   #stage{flex:0 0 560px;display:flex;align-items:center;justify-content:center;position:relative;background:radial-gradient(circle at 50% 40%,#f3ecf0,#e3d7df);}
   #anime{display:block;width:512px;height:512px;border-radius:12px;background:#e3d7df;object-fit:cover;}
   #c{position:absolute;bottom:16px;right:16px;width:110px;height:110px;border:2px solid #fff;border-radius:8px;opacity:.92;box-shadow:0 2px 10px rgba(0,0,0,.22);}
-  #v2dot{position:absolute;top:14px;right:14px;font-size:11px;color:#5a8;opacity:.85;}
+  #v2btn{position:absolute;top:12px;right:14px;padding:6px 12px;border:1px solid #d8cdd5;border-radius:14px;font-size:12px;background:rgba(255,255,255,.85);color:#85677a;cursor:pointer;z-index:11;}
+  #v2btn.on{background:#6aa84f;color:#fff;border-color:#6aa84f;}
   #avatars{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:6px;z-index:10;}
   .av{padding:5px 11px;border:1px solid #d8cdd5;border-radius:14px;font-size:12px;background:rgba(255,255,255,.82);color:#85677a;cursor:pointer;}
   .av.on{background:#c07b9c;color:#fff;border-color:#c07b9c;}
@@ -32,7 +33,7 @@
 </head>
 <body>
 <div id="wrap">
-  <div id="stage"><div id="dot">connecting…</div><div id="v2dot">v2 ○</div><div id="avatars"></div><img id="anime"/><canvas id="c" width="512" height="512"></canvas></div>
+  <div id="stage"><div id="dot">connecting…</div><button id="v2btn">✨ 实景渲染</button><div id="avatars"></div><img id="anime"/><canvas id="c" width="512" height="512"></canvas></div>
   <div id="side">
     <div id="modes"></div>
     <div id="log"></div>
@@ -75,6 +76,53 @@ const audioCache = {};
 // Portrait stage so the FULL body fits (avatars are tall) and we use the vertical space.
 const CH = Math.max(600, Math.min(window.innerHeight - 24, 1000));
 const CW = Math.min(540, Math.round(CH * 0.62));
+
+// ── StreamDiffusionV2 bridge (toggled): Live2D canvas = driver -> DGX V2 -> anime MJPEG.
+// V2 has its own public Funnel port (:8443 -> DGX 7860); no private IP, wss on HTTPS.
+const V2_HOST = (BACKEND || location.hostname) + ":8443";
+const V2_WSS = (location.protocol === "https:" || BACKEND) ? "wss" : "ws";
+const V2_HTTPS = (location.protocol === "https:" || BACKEND) ? "https" : "http";
+const V2_PARAMS = { prompt: "masterpiece, ultra-detailed anime, beautiful girl, silver white hair, "
+  + "emerald green eyes, exquisitely detailed face, soft cinematic lighting, clean background",
+  negative_prompt: "lowres, bad anatomy, blurry, deformed, extra limbs", input_mode: "camera", seed: 42 };
+let v2ws = null, v2on = false;
+function canvasJpeg() {
+  return new Promise(res => document.getElementById("c").toBlob(
+    b => b ? b.arrayBuffer().then(res) : res(null), "image/jpeg", 0.9));
+}
+async function startV2() {
+  if (v2ws) return;
+  const id = (crypto.randomUUID ? crypto.randomUUID() : ("" + Math.random()).slice(2) + Date.now());
+  const ws = new WebSocket(`${V2_WSS}://${V2_HOST}/api/ws/${id}`); v2ws = ws; ws.binaryType = "arraybuffer";
+  async function sendFrame() {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const buf = await canvasJpeg();
+    if (!buf || buf.byteLength < 100 || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ status: "next_frame" })); ws.send(JSON.stringify(V2_PARAMS)); ws.send(buf);
+  }
+  ws.onopen = async () => {
+    for (let i = 0; i < 3; i++) await sendFrame();                  // PRIME before opening the stream
+    document.getElementById("anime").src = `${V2_HTTPS}://${V2_HOST}/api/stream/${id}?t=` + Date.now();
+  };
+  ws.onmessage = async (e) => {
+    if (typeof e.data !== "string") return;
+    try { const d = JSON.parse(e.data); if (d.status === "send_frame" || d.status === "wait") await sendFrame(); } catch (err) {}
+  };
+  ws.onclose = () => { v2ws = null; if (v2on) setTimeout(startV2, 1500); };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+function toggleV2() {
+  v2on = !v2on;
+  const a = document.getElementById("anime"), btn = document.getElementById("v2btn");
+  if (btn) btn.classList.toggle("on", v2on);
+  if (v2on) {
+    a.style.cssText = `display:block;position:absolute;width:${CW}px;height:${CH}px;border-radius:12px;object-fit:cover;z-index:5;background:#000;`;
+    startV2();
+  } else {
+    a.style.display = "none"; a.src = "";
+    if (v2ws) { try { v2ws.close(); } catch (e) {} } v2ws = null;
+  }
+}
 
 
 let loadSeq = 0;
@@ -124,9 +172,9 @@ function buildAvatars() {
   buildAvatars();
   await loadModel(curModel);
   connect();
-  // pure Live2D: the canvas is the main display
+  // Live2D canvas is the default display; the V2 toggle overlays the anime stream on top
   const _anime = document.getElementById("anime"); if (_anime) _anime.style.display = "none";
-  const _v2dot = document.getElementById("v2dot"); if (_v2dot) _v2dot.style.display = "none";
+  const _v2btn = document.getElementById("v2btn"); if (_v2btn) _v2btn.onclick = toggleV2;
   const cv = document.getElementById("c");
   cv.style.cssText = "display:block;position:static;width:" + CW + "px;height:" + CH + "px;border:none;box-shadow:none;opacity:1;border-radius:12px;";
   // apply the most recent params every animation frame (smooth even if net jitters)
