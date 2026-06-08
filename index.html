@@ -73,43 +73,6 @@ const HOLD_KEYS = new Set(["ParamAngleX","ParamAngleY","ParamAngleZ","ParamBodyA
   "ParamArmLA01","ParamArmRA01"]);
 const audioCache = {};
 
-// ── StreamDiffusionV2 bridge: Live2D canvas (driver) -> DGX v2 -> anime stream ──
-const V2_ENABLED = false;   // OFF: pure Live2D dev. flip true to render through DGX v2.
-const V2_HOST = "100.97.254.63:7860";
-const V2_PARAMS = { prompt: "masterpiece, ultra-detailed anime, beautiful girl, silver white hair, "
-  + "emerald green eyes, exquisitely detailed face, soft cinematic lighting, upper body, clean background",
-  negative_prompt: "lowres, bad anatomy, blurry, deformed, extra limbs", input_mode: "camera", seed: 42 };
-function canvasJpeg() {
-  return new Promise(res => document.getElementById("c").toBlob(
-    b => b ? b.arrayBuffer().then(res) : res(null), "image/jpeg", 0.9));
-}
-async function startV2() {
-  const id = (crypto.randomUUID ? crypto.randomUUID()
-    : ([1e7]+-1e3+-4e3).replace(/[018]/g, c => (c ^ Math.random()*16 >> c/4).toString(16)));
-  const ws = new WebSocket(`ws://${V2_HOST}/api/ws/${id}`);
-  ws.binaryType = "arraybuffer";
-  async function sendFrame() {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    const buf = await canvasJpeg();
-    if (!buf || buf.byteLength < 100 || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ status: "next_frame" }));
-    ws.send(JSON.stringify(V2_PARAMS));
-    ws.send(buf);
-  }
-  ws.onopen = async () => {
-    document.getElementById("v2dot").textContent = "v2 ● live";
-    for (let i = 0; i < 3; i++) await sendFrame();              // PRIME before opening stream
-    document.getElementById("anime").src = `http://${V2_HOST}/api/stream/${id}?t=` + Date.now();
-  };
-  ws.onmessage = async (e) => {
-    if (typeof e.data !== "string") return;
-    try { const d = JSON.parse(e.data);
-      if (d.status === "send_frame" || d.status === "wait") await sendFrame();
-    } catch (err) {}
-  };
-  ws.onclose = () => { document.getElementById("v2dot").textContent = "v2 ○ reconnecting"; setTimeout(startV2, 1500); };
-  ws.onerror = () => { try { ws.close(); } catch (e) {} };
-}
 
 let loadSeq = 0;
 async function loadModel(key) {
@@ -155,14 +118,11 @@ function buildAvatars() {
   buildAvatars();
   await loadModel(curModel);
   connect();
-  if (V2_ENABLED) {
-    setTimeout(startV2, 1200);   // Live2D drives a few frames first, then bridge to v2 renderer
-  } else {                       // pure Live2D: canvas is the main display, no v2
-    document.getElementById("anime").style.display = "none";
-    document.getElementById("v2dot").style.display = "none";
-    const cv = document.getElementById("c");
-    cv.style.cssText = "display:block;position:static;width:512px;height:512px;border:none;box-shadow:none;opacity:1;border-radius:12px;";
-  }
+  // pure Live2D: the canvas is the main display
+  const _anime = document.getElementById("anime"); if (_anime) _anime.style.display = "none";
+  const _v2dot = document.getElementById("v2dot"); if (_v2dot) _v2dot.style.display = "none";
+  const cv = document.getElementById("c");
+  cv.style.cssText = "display:block;position:static;width:512px;height:512px;border:none;box-shadow:none;opacity:1;border-radius:12px;";
   // apply the most recent params every animation frame (smooth even if net jitters)
   function frame() {
     if (latest && core && model) {
