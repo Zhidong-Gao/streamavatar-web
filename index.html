@@ -86,16 +86,19 @@ const V2_PARAMS = { prompt: "masterpiece, ultra-detailed anime, beautiful girl, 
   + "emerald green eyes, exquisitely detailed face, soft cinematic lighting, clean background",
   negative_prompt: "lowres, bad anatomy, blurry, deformed, extra limbs", input_mode: "camera", seed: 42 };
 let v2ws = null, v2on = false;
+const V2W = 384, V2H = 512;   // V2 driver resolution (portrait, fewer pixels -> faster render)
 let _v2cv = null;
 function canvasJpeg() {
-  // Downscale the (tall) Live2D canvas into a small SQUARE driver frame: far fewer pixels
-  // -> the V2 model runs much faster, and a 2D canvas toBlob is reliable (unlike toBlob on
-  // the WebGL canvas). 384² hits the server's throughput ceiling.
+  // Downscale the tall Live2D canvas into a small 384x512 driver frame (far fewer pixels ->
+  // the V2 model runs much faster; a 2D-canvas toBlob is also reliable, unlike toBlob on the
+  // WebGL canvas). Fit + preserve aspect so the body isn't distorted.
   const src = document.getElementById("c");
-  if (!_v2cv) { _v2cv = document.createElement("canvas"); _v2cv.width = 384; _v2cv.height = 384; }
+  if (!_v2cv) { _v2cv = document.createElement("canvas"); _v2cv.width = V2W; _v2cv.height = V2H; }
   const ctx = _v2cv.getContext("2d");
-  ctx.fillStyle = "#ece2e8"; ctx.fillRect(0, 0, 384, 384);
-  ctx.drawImage(src, 0, 0, 384, 384);
+  ctx.fillStyle = "#ece2e8"; ctx.fillRect(0, 0, V2W, V2H);
+  const s = Math.min(V2W / src.width, V2H / src.height);
+  const w = src.width * s, h = src.height * s;
+  ctx.drawImage(src, (V2W - w) / 2, (V2H - h) / 2, w, h);
   return new Promise(res => _v2cv.toBlob(b => b ? b.arrayBuffer().then(res) : res(null), "image/jpeg", 0.9));
 }
 async function startV2() {
