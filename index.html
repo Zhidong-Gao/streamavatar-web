@@ -111,10 +111,14 @@ async function startV2() {
   ws.onerror = () => { try { ws.close(); } catch (e) {} };
 }
 
+let loadSeq = 0;
 async function loadModel(key) {
   const def = MODELS[key] || MODELS.Mao;
+  const my = ++loadSeq;                        // claim this load; supersedes any in-flight one
   if (model) { try { app.stage.removeChild(model); model.destroy(); } catch (e) {} model = null; core = null; }
-  model = await PIXI.live2d.Live2DModel.from(def.url, { autoInteract: false });
+  const m = await PIXI.live2d.Live2DModel.from(def.url, { autoInteract: false });
+  if (my !== loadSeq) { try { m.destroy(); } catch (e) {} return; }   // a newer switch started -> drop this one
+  model = m;
   app.stage.addChild(model);
   const b = model.getBounds();
   model.scale.set(512 / Math.max(b.width, b.height) * def.scale);
