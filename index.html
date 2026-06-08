@@ -86,9 +86,17 @@ const V2_PARAMS = { prompt: "masterpiece, ultra-detailed anime, beautiful girl, 
   + "emerald green eyes, exquisitely detailed face, soft cinematic lighting, clean background",
   negative_prompt: "lowres, bad anatomy, blurry, deformed, extra limbs", input_mode: "camera", seed: 42 };
 let v2ws = null, v2on = false;
+let _v2cv = null;
 function canvasJpeg() {
-  return new Promise(res => document.getElementById("c").toBlob(
-    b => b ? b.arrayBuffer().then(res) : res(null), "image/jpeg", 0.9));
+  // Downscale the (tall) Live2D canvas into a small SQUARE driver frame: far fewer pixels
+  // -> the V2 model runs much faster, and a 2D canvas toBlob is reliable (unlike toBlob on
+  // the WebGL canvas). 384² hits the server's throughput ceiling.
+  const src = document.getElementById("c");
+  if (!_v2cv) { _v2cv = document.createElement("canvas"); _v2cv.width = 384; _v2cv.height = 384; }
+  const ctx = _v2cv.getContext("2d");
+  ctx.fillStyle = "#ece2e8"; ctx.fillRect(0, 0, 384, 384);
+  ctx.drawImage(src, 0, 0, 384, 384);
+  return new Promise(res => _v2cv.toBlob(b => b ? b.arrayBuffer().then(res) : res(null), "image/jpeg", 0.9));
 }
 async function startV2() {
   if (v2ws) return;
