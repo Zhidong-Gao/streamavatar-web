@@ -77,9 +77,12 @@ const audioCache = {};
 const CH = Math.max(600, Math.min(window.innerHeight - 24, 1000));
 const CW = Math.min(540, Math.round(CH * 0.62));
 
-// ── StreamDiffusionV2 bridge (toggled): Live2D canvas = driver -> DGX V2 -> anime MJPEG.
-// V2 has its own public Funnel port (:8443 -> DGX 7860); no private IP, wss on HTTPS.
-const V2_HOST = (BACKEND || location.hostname) + ":8443";
+// ── StreamDiffusionV2 bridge (toggled): Live2D canvas = driver -> V2 server -> anime MJPEG.
+// Default V2 = DGX's :8443 Funnel. Override with ?v2=<host> to point at another V2 server
+// (e.g. an A800 exposed via a tunnel) — strips any scheme/trailing slash.
+const _v2override = new URLSearchParams(location.search).get("v2");
+const V2_HOST = _v2override ? _v2override.replace(/^[a-z]+:\/\//, "").replace(/\/+$/, "")
+  : (BACKEND || location.hostname) + ":8443";
 const V2_WSS = (location.protocol === "https:" || BACKEND) ? "wss" : "ws";
 const V2_HTTPS = (location.protocol === "https:" || BACKEND) ? "https" : "http";
 const V2_PARAMS = { prompt: "masterpiece, ultra-detailed anime, beautiful girl, silver white hair, "
