@@ -106,7 +106,10 @@ function canvasJpeg() {
 }
 async function startV2() {
   if (v2ws) return;
-  const id = (crypto.randomUUID ? crypto.randomUUID() : ("" + Math.random()).slice(2) + Date.now());
+  // ?v2id=<id> pins the V2 session id (so a thin "watch" client can view this exact
+  // cloud-rendered stream); otherwise a fresh random id per session.
+  const id = new URLSearchParams(location.search).get("v2id")
+    || (crypto.randomUUID ? crypto.randomUUID() : ("" + Math.random()).slice(2) + Date.now());
   const ws = new WebSocket(`${V2_WSS}://${V2_HOST}/api/ws/${id}`); v2ws = ws; ws.binaryType = "arraybuffer";
   async function sendFrame() {
     if (ws.readyState !== WebSocket.OPEN) return;
@@ -191,6 +194,16 @@ function buildAvatars() {
   const _v2btn = document.getElementById("v2btn"); if (_v2btn) _v2btn.onclick = toggleV2;
   const cv = document.getElementById("c");
   cv.style.cssText = "display:block;position:static;width:" + CW + "px;height:" + CH + "px;border:none;box-shadow:none;opacity:1;border-radius:12px;";
+  // WATCH MODE (?watch=<id>): thin client — the cloud renders Live2D+V2; we only DISPLAY its
+  // anime stream and keep chat/audio. Hide the local Live2D canvas, show the cloud stream.
+  const _watch = new URLSearchParams(location.search).get("watch");
+  if (_watch) {
+    cv.style.display = "none";
+    const a = document.getElementById("anime");
+    a.style.cssText = "display:block;position:static;width:" + CW + "px;height:" + CH + "px;object-fit:cover;border-radius:12px;background:#000;";
+    a.src = `${V2_HTTPS}://${V2_HOST}/api/stream/${_watch}?t=` + Date.now();
+    if (_v2btn) _v2btn.style.display = "none";   // viewer doesn't toggle; cloud drives it
+  }
   // apply the most recent params every animation frame (smooth even if net jitters)
   function frame() {
     if (latest && core && model) {
